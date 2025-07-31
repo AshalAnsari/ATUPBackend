@@ -6,3 +6,5 @@ uuid
 python-multipart
 python-dotenv
 datetime
+python-decouple
+apscheduler

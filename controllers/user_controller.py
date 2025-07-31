@@ -3,8 +3,10 @@ from models.user_model import User
 from schema.user_schema import UserResponse
 from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse
-from fastapi import HTTPException, status
+from fastapi import status
 from controllers.activity_controller import deleteAllActivityForAUser
+from datetime import datetime
+from views.email import send_verification_email
 
 def get_list_of_users(db: Session) -> list[UserResponse]:
     users = db.query(User).all()
@@ -28,6 +30,8 @@ def getUserFromToken(token: str, db: Session):
                 'token':existing_user.id,
                 'username':existing_user.username,
                 'email':existing_user.email,
+                'image': existing_user.image,
+                'verified': existing_user.verified,
                 'createdOn':existing_user.createdOn.isoformat()
             }
         )
@@ -35,10 +39,9 @@ def getUserFromToken(token: str, db: Session):
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={
-            'error':"Something went wrong"
+            'error':"User not found!"
         }
     )
-
 
 def loginUser(username: str, password: str, db: Session):
     if username == "" or password == "":
@@ -54,10 +57,12 @@ def loginUser(username: str, password: str, db: Session):
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
-                'token':existing_user.id,
-                'username':existing_user.username,
-                'email':existing_user.email,
-                'createdOn':existing_user.createdOn.isoformat()
+                'token': existing_user.id,
+                'username': existing_user.username,
+                'email': existing_user.email,
+                'image': existing_user.image,
+                'verified': existing_user.verified,
+                'createdOn': existing_user.createdOn.isoformat()
             }
         )
     
@@ -87,12 +92,17 @@ def signupUser(username: str, email: str, password: str, db: Session):
             }   
         )
     
+    
     new_user = User(
         id = str(uuid.uuid4()),
         username = username,
         email = email,
         password = password,
+        image = None,
+        verified = False,
     )
+
+    send_verification_email(email, new_user.id)
 
     db.add(new_user)
     db.commit()
@@ -104,7 +114,10 @@ def signupUser(username: str, email: str, password: str, db: Session):
             'token': new_user.id,
             'username': new_user.username,
             'email': new_user.email,
-            'createdOn': new_user.createdOn.isoformat()
+            'image': new_user.image,
+            'verified': new_user.verified,
+            'createdOn': new_user.createdOn.isoformat(),
+            'message': "An email verification has been sent to you email. Verify in 2 days, otherwise your account will be deleted!"
         }
     )
 
@@ -143,5 +156,71 @@ def deleteUser(token: str, db: Session):
         content={
             'message': 'User deleted successfully!',
             'user': user_data
+        }
+    )
+
+def editUserDetails(token: str, data: dict, db: Session):
+    if not token:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={'error': "You are not authorized"}
+        )
+    
+    user = db.query(User).filter_by(id=token).first()
+
+    if not user:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={'error': "User doesn't exist or not found!"}
+        )
+
+    for key, value in data.items():
+        if hasattr(user, key):
+            attr_type = type(getattr(user, key))
+            if attr_type is datetime and isinstance(value, str):
+                try:
+                    value = datetime.fromisoformat(value)
+                except ValueError:
+                    return JSONResponse(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        content={'error': f"Invalid datetime format for '{key}'"}
+                    )
+            setattr(user, key, value)
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        'message':"User updated successfully",
+        'token':user.id,
+        'username': user.username,
+        'email': user.email,
+        'image': user.image,
+        'verified': user.verified,
+    }
+
+def verify_email(token: str, db: Session):
+    if not token:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={'error': "You are not authorized"}
+        )
+
+    user = db.query(User).filter_by(id = token).first()
+
+    if not user:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={'error': "User not found!"}
+        )
+
+    user.verified = True
+    db.commit()
+    db.refresh(user)
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "message": "User Verified!",
         }
     )
