@@ -6,7 +6,12 @@ from fastapi.responses import JSONResponse
 from fastapi import status
 from controllers.activity_controller import deleteAllActivityForAUser
 from datetime import datetime
-from views.email import send_verification_email
+from views.email import send_verification_email, generate_otp, sendOTP
+from models.reset_model import ResetModel
+from datetime import datetime, timezone, timedelta
+from utils.hashotp import hash_otp
+from sqlalchemy import and_
+
 
 def get_list_of_users(db: Session) -> list[UserResponse]:
     users = db.query(User).all()
@@ -222,5 +227,71 @@ def verify_email(token: str, db: Session):
         status_code=status.HTTP_200_OK,
         content={
             "message": "User Verified!",
+        }
+    )
+
+
+def sendResetPasswordOTP(email: str, db: Session):
+    emailExist = db.query(User).filter_by(email = email).first()
+
+    if(emailExist):
+        otp = generate_otp(length=6)
+        hashed_otp = hash_otp(otp)
+        if(otp):
+            new_entry = ResetModel(
+                id = str(uuid.uuid4()),
+                user_id = str(emailExist.id),
+                otp_hash = hashed_otp,
+                timestamp = datetime.now(timezone.utc),
+                expires_at = datetime.now(timezone.utc) + timedelta(minutes=10),
+                is_used = False
+            )
+
+            db.add(new_entry)
+            db.commit()
+
+            sendOTP(recipient=email, otp=otp)
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "message":f"An OTP has been sent to your email"
+                }
+            )
+    
+    return JSONResponse(
+        status_code=status.HTTP_404_NOT_FOUND,
+        content={
+            "error":f"User associated with {email} does not exist!"
+        }
+    )
+
+def checkOTP(otp: str, db: Session):
+    if otp is None or otp == "":
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "error":"Please Enter the OTP sent to your email"
+            }
+        )
+    
+    hashedOtp = hash_otp(otp)
+    now = datetime.now(timezone.utc)
+
+    checkIfOTPExist = db.query(ResetModel).filter(and_(ResetModel.otp_hash == hashedOtp, ResetModel.expires_at > now, ResetModel.is_used == False)).first()
+
+    if(checkIfOTPExist):
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "token":checkIfOTPExist.user_id,
+                "message":"OTP matched! Now you can change your password."
+            }
+        )
+    
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={
+            "error": "You either entered the wrong OTP or it was expired."
         }
     )
