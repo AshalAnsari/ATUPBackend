@@ -11,7 +11,7 @@ from models.reset_model import ResetModel
 from datetime import datetime, timezone, timedelta
 from utils.hashotp import hash_otp
 from sqlalchemy import and_
-
+import bcrypt
 
 def get_list_of_users(db: Session) -> list[UserResponse]:
     users = db.query(User).all()
@@ -56,9 +56,9 @@ def loginUser(username: str, password: str, db: Session):
             )
     
     ### Now, to Authenticate the user ###
-    existing_user = db.query(User).filter((User.username == username) & (User.password == password)).first()
+    existing_user = db.query(User).filter((User.username == username)).first()
 
-    if existing_user:
+    if existing_user and bcrypt.checkpw(password.encode('utf-8'), existing_user.password.encode('utf-8')):
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
@@ -97,14 +97,16 @@ def signupUser(username: str, email: str, password: str, db: Session):
             }   
         )
     
+    hashedPassword = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     
     new_user = User(
         id = str(uuid.uuid4()),
         username = username,
         email = email,
-        password = password,
+        password = hashedPassword,
         image = None,
         verified = False,
+        
     )
 
     send_verification_email(email, new_user.id)
@@ -125,6 +127,60 @@ def signupUser(username: str, email: str, password: str, db: Session):
             'message': "An email verification has been sent to you email. Verify in 2 days, otherwise your account will be deleted!"
         }
     )
+
+def signupWithGoogle(token: str, username: str, email: str, image: str, db: Session):
+    if token == "" or username == "" or email == "" or token is None or username is None or email is None:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                'error': "Token, Username, or Email is missing!"
+            }
+        )
+    
+    existing_user = db.query(User).filter((User.username == username) | (User.email == email)).first()
+
+    if existing_user:
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                'token': existing_user.id,
+                'username': existing_user.username,
+                'email': existing_user.email,
+                'image': existing_user.image,
+                'verified': existing_user.verified,
+                'createdOn': existing_user.createdOn.isoformat(),
+                'userExist':True,
+            }  
+        )
+    
+    hashedPassword = bcrypt.hashpw("googleSigninMethod".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')  # Placeholder password
+    
+    new_user = User(
+        id = token,
+        username = username,
+        email = email,
+        password = hashedPassword,  
+        image = image,
+        verified = True,  
+    )
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            'token': new_user.id,
+            'username': new_user.username,
+            'email': new_user.email,
+            'image': new_user.image,
+            'verified': new_user.verified,
+            'createdOn': new_user.createdOn.isoformat(),
+            'userExist': False,
+        }
+    )
+
 
 def deleteUser(token: str, db: Session):
     if not token:

@@ -8,3 +8,4 @@ python-dotenv
 datetime
 python-decouple
 apscheduler
+bcrypt
